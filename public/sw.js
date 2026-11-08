@@ -2,7 +2,8 @@
  * 策略:
  * - 只处理同源 GET 请求;60s API / HN / OpenRouter 等跨域请求与封面图全部不拦;
  * - 页面导航 network-first(保证发版后拿到新 index.html),离线时回退缓存的壳;
- * - 同源静态资源(含带 hash 的产物、每日快照 JSON)stale-while-revalidate;
+ * - 每日快照 JSON network-first(发版/换日当次就能拿到新封面),离线时回退缓存;
+ * - 其余同源静态资源(含带 hash 的产物)stale-while-revalidate;
  * - 缓存名带注册时的 ?v= 版本(由构建注入),activate 时清理旧版本。
  */
 const VERSION = new URLSearchParams(self.location.search).get('v') || 'dev';
@@ -46,6 +47,23 @@ self.addEventListener('fetch', (event) => {
             (await cache.match('./')) ||
             Response.error()
           );
+        }
+      })(),
+    );
+    return;
+  }
+
+  // 每日快照必须拿到当次构建的版本,否则发版后首访仍会读到旧快照(缺封面)
+  if (url.pathname.endsWith('/data/snapshot.json')) {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(CACHE);
+        try {
+          const res = await fetch(req);
+          if (res.ok) cache.put(req, res.clone());
+          return res;
+        } catch {
+          return (await cache.match(req)) || Response.error();
         }
       })(),
     );

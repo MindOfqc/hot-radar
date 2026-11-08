@@ -1,13 +1,30 @@
 import { useCallback, useEffect, useState } from 'react';
 
-export type PageId = 'boards' | 'monitor' | 'search' | 'settings';
+export type PageId =
+  | 'boards'
+  | 'monitor'
+  | 'search'
+  | 'dashboard'
+  | 'chat'
+  | 'profile'
+  | 'auth'
+  | 'settings';
 
 export interface Route {
   page: PageId;
   params: Record<string, string>;
 }
 
-const PAGES: PageId[] = ['boards', 'monitor', 'search', 'settings'];
+const PAGES: PageId[] = [
+  'boards',
+  'monitor',
+  'search',
+  'dashboard',
+  'chat',
+  'profile',
+  'auth',
+  'settings',
+];
 
 function parseHash(hash: string): Route {
   const raw = hash.replace(/^#\/?/, '');

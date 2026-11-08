@@ -1,0 +1,10 @@
+# 复制为 .dev.vars 后填写本地开发配置。
+# .dev.vars 已被 .gitignore 忽略，不要提交真实的 QQ 邮箱授权码。
+#
+# MAIL_USER / MAIL_PASS 仅用于本地真实发信；
+# 当 ENVIRONMENT=development 且 DEV_RETURN_CODE=1 时，验证码会直接出现在响应里，不会发邮件。
+MAIL_USER=
+MAIL_PASS=
+ENVIRONMENT=development
+DEV_RETURN_CODE=1
+ADMIN_NICKNAME=ordeal

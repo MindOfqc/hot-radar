@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths-ignore:
       - 'public/data/snapshot.json'
+      - 'public/covers/**'
   workflow_dispatch:
 
 permissions:
@@ -20,7 +21,7 @@ concurrency:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: 拉取仓库
         uses: actions/checkout@v5
@@ -29,6 +30,10 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
 
       - name: 抓取各平台热榜快照
         run: node scripts/snapshot.mjs
@@ -38,13 +43,13 @@ jobs:
 
       - name: 提交快照
         run: |
-          if git diff --quiet public/data/snapshot.json; then
+          git add public/data/snapshot.json public/covers
+          if git diff --cached --quiet; then
             echo "快照无变化,跳过提交"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/data/snapshot.json
           git commit -m "chore(data): 更新每日热榜快照 $(date -u +%F)"
           git pull --rebase --autostash origin main
           git push

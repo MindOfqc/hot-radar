@@ -1,0 +1,31 @@
+name = "hot-radar-api"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+workers_dev = true
+
+# 自定义域名：与花海 API 同属 mindofqc.dpdns.org，避免 workers.dev 在部分网络不可达。
+# 放在表格（[vars] / [[d1_databases]]）之前，routes 才是顶层配置。
+routes = [
+  { pattern = "hotradar-api.mindofqc.dpdns.org", custom_domain = true }
+]
+
+# 管理员昵称：全站只有这个昵称对应的账号能访问 GET /api/admin/stats。
+# 首次解析时把"唯一持有该昵称的账号 id"固定写入 D1 的 hr_meta，之后权限跟 id 走，
+# 改名或被别人抢注都不会转移权限。改完需重新部署（或本地重启 wrangler dev）。
+[vars]
+ADMIN_NICKNAME = "ordeal"
+MAIL_SENDER_NAME = "热点雷达"
+ENVIRONMENT = "production"
+
+# 执行 `npx wrangler@4 d1 create hot-radar` 后，把输出的 database_id 替换到这里。
+# 本地 `npx wrangler@4 dev` 可以使用占位值；远程部署前必须替换，否则 deploy 会报错。
+[[d1_databases]]
+binding = "DB"
+database_name = "hot-radar"
+database_id = "a77e31a4-43e6-414d-8cd0-63d24e4ec0cd"
+migrations_dir = "migrations"
+
+# 机密配置（不要写进本文件，用 secret 配置）：
+#   npx wrangler@4 secret put MAIL_USER   # QQ 邮箱地址，如 235173498@qq.com
+#   npx wrangler@4 secret put MAIL_PASS   # QQ 邮箱 SMTP 授权码（不是 QQ 密码）
+# 本地开发则在 .dev.vars 中写同名键值（可从 .dev.vars.example 复制）。

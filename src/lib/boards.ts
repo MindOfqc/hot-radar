@@ -134,6 +134,17 @@ function toBoardItem(it: Api60sItem, source: BoardId): BoardItem | null {
   return { title, url, source };
 }
 
+/** 快照封面会缓存到 public/covers，本地路径需要拼上部署 base。 */
+function resolveCover(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim();
+  if (!value) return undefined;
+  if (value.startsWith('covers/') || value.startsWith('/covers/')) {
+    return `${import.meta.env.BASE_URL}${value.replace(/^\/?/, '')}`;
+  }
+  return safeUrl(value);
+}
+
 async function fetchFrom60s(
   path: string,
   source: BoardId,
@@ -230,7 +241,7 @@ function normalizeSnapshot(raw: unknown): SnapshotFile | null {
         heat: typeof it.heat === 'number' ? it.heat : undefined,
         heatLabel: typeof it.heatLabel === 'string' ? it.heatLabel : undefined,
         extra: typeof it.extra === 'string' ? it.extra : undefined,
-        cover: typeof it.cover === 'string' ? safeUrl(it.cover) : undefined,
+        cover: resolveCover(it.cover),
       });
     }
     if (items.length > 0) {
@@ -321,7 +332,12 @@ export async function fetchBoard(
   if (id === 'hackernews') {
     try {
       const now = Date.now();
-      const result = { items: await hnFrontPage(), from: 'live' as const, fetchedAt: now, loadedAt: now };
+      const result = {
+        items: await mergeSnapshotCovers(id, await hnFrontPage()),
+        from: 'live' as const,
+        fetchedAt: now,
+        loadedAt: now,
+      };
       saveBoardCache(id, result);
       return result;
     } catch (e) {
@@ -331,8 +347,9 @@ export async function fetchBoard(
     }
   }
   try {
-    const items = await fetchFrom60s(meta.api!, id, timeoutMs);
-    if (items.length === 0) throw new Error('空数据');
+    const liveItems = await fetchFrom60s(meta.api!, id, timeoutMs);
+    if (liveItems.length === 0) throw new Error('空数据');
+    const items = await mergeSnapshotCovers(id, liveItems);
     const now = Date.now();
     const result = { items, from: 'live' as const, fetchedAt: now, loadedAt: now };
     saveBoardCache(id, result);
@@ -350,6 +367,33 @@ export async function fetchBoard(
       }
     );
   }
+}
+
+/** 按 URL/标题套用快照封面:同一张图已本地化且不会过期,优先于实时接口的签名链接。 */
+export function applySnapshotCovers(
+  items: BoardItem[],
+  previous?: BoardItem[],
+): BoardItem[] {
+  if (!previous?.length) return items;
+  const byUrl = new Map<string, string>();
+  const byTitle = new Map<string, string>();
+  for (const item of previous) {
+    if (!item.cover) continue;
+    byUrl.set(item.url, item.cover);
+    byTitle.set(item.title, item.cover);
+  }
+  return items.map((item) => {
+    const cover = byUrl.get(item.url) ?? byTitle.get(item.title);
+    if (!cover) return item;
+    return { ...item, cover };
+  });
+}
+
+/** 实时接口不返回封面时,按 URL/标题复用快照里已缓存的本地封面。
+ * B 站、微博、小红书等热榜接口只给文字,快照里可能有补图。 */
+async function mergeSnapshotCovers(id: BoardId, items: BoardItem[]): Promise<BoardItem[]> {
+  const snap = await loadSnapshot();
+  return applySnapshotCovers(items, snap?.boards[id]);
 }
 
 async function fallbackSnapshot(id: BoardId): Promise<BoardFetchResult | null> {

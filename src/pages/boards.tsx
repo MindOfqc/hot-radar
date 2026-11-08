@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BoardId } from '../types';
 import {
   BOARDS,
+  applySnapshotCovers,
   boardMeta,
   fetchBoard,
   fetchBoards,
@@ -9,12 +10,14 @@ import {
   loadSnapshot,
   snapshotBoardResult,
   type BoardFetchResult,
+  type BoardMeta,
   type SnapshotFile,
 } from '../lib/boards';
 import { matchesExclude } from '../lib/aggregate';
 import { relativeTime } from '../lib/format';
 import { useSettings } from '../lib/storage';
 import { Badge, Button, Card, EmptyState, HeatBar, Spinner } from '../components/ui';
+import { CoverThumb } from '../components/cover-thumb';
 import { ExternalIcon, FlameIcon, RefreshIcon } from '../components/icons';
 
 /** 会话级榜单缓存,切换标签不重复请求 */
@@ -51,13 +54,16 @@ function useBoard(id: BoardId, snap: SnapshotFile | null) {
   const snapshotState = snapshotBoardResult(snap, id);
   const live = slot.id === id ? slot.result : null;
   const cached = cache.get(id);
-  const state =
+  const baseState =
     (live && live.items.length > 0 ? live : null) ??
     (cached && cached.items.length > 0 ? cached : null) ??
     snapshotState ??
     live ??
     cached ??
     null;
+  const state = baseState
+    ? { ...baseState, items: applySnapshotCovers(baseState.items, snap?.boards[id]) }
+    : null;
 
   const load = useCallback(
     async (force = false) => {
@@ -122,22 +128,30 @@ const RANK_TOP_CLS = [
   'rounded-blob-3 bg-blue text-white -rotate-4',
 ];
 
+function coverFailureKey(item: BoardFetchResult['items'][number]): string {
+  return `${item.url}\u0000${item.cover ?? ''}`;
+}
+
 function BoardRow({
   item,
   rank,
   maxHeat,
   prevRank,
   trendReady,
+  onCoverFail,
 }: {
   item: BoardFetchResult['items'][number];
   rank: number;
   maxHeat: number;
   prevRank?: number;
   trendReady: boolean;
+  onCoverFail: () => void;
 }) {
   const top = rank <= 3;
   const isNew = trendReady && prevRank == null;
   const delta = prevRank != null ? prevRank - rank : 0;
+
+  if (!item.cover) return null;
 
   return (
     <a
@@ -153,15 +167,7 @@ function BoardRow({
       >
         {rank}
       </span>
-      {item.cover && (
-        <img
-          src={item.cover}
-          alt=""
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          className="size-10 shrink-0 rounded-btn border-toon-sm object-cover"
-        />
-      )}
+      <CoverThumb cover={item.cover} onFail={onCoverFail} />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <p className="min-w-0 flex-1 truncate text-sm font-extrabold leading-6 text-ink group-hover:text-accent-deep">
@@ -212,7 +218,17 @@ function SkeletonRows() {
 
 /* ============ 聚合总览:各源 Top 10 一屏看完 ============ */
 
-function AggregateView({ snap }: { snap: SnapshotFile | null }) {
+function AggregateView({
+  snap,
+  boards,
+  failedCoverKeys,
+  onCoverFail,
+}: {
+  snap: SnapshotFile | null;
+  boards: BoardMeta[];
+  failedCoverKeys: Set<string>;
+  onCoverFail: (item: BoardFetchResult['items'][number]) => void;
+}) {
   const [results, setResults] = useState<Partial<Record<BoardId, BoardFetchResult>>>(() => {
     const seed: Partial<Record<BoardId, BoardFetchResult>> = {};
     for (const b of BOARDS) {
@@ -334,9 +350,11 @@ function AggregateView({ snap }: { snap: SnapshotFile | null }) {
         </Button>
       </div>
 
-      {BOARDS.map((b) => {
+      {boards.map((b) => {
         const r = results[b.id];
-        const all = r?.items ?? [];
+        const all = applySnapshotCovers(r?.items ?? [], snap?.boards[b.id]).filter(
+          (it) => Boolean(it.cover) && !failedCoverKeys.has(coverFailureKey(it)),
+        );
         const items = exclude.trim()
           ? all.filter((it) => !matchesExclude(`${it.title} ${it.extra ?? ''}`, exclude))
           : all;
@@ -367,6 +385,7 @@ function AggregateView({ snap }: { snap: SnapshotFile | null }) {
                 rank={index + 1}
                 maxHeat={maxHeat}
                 trendReady={false}
+                onCoverFail={() => onCoverFail(item)}
               />
             ))}
             {r && top.length === 0 && (
@@ -387,7 +406,15 @@ export default function BoardsPage() {
   const [active, setActive] = useState<BoardTab>('all');
   const [snap, setSnap] = useState<SnapshotFile | null>(null);
   const [onlyNew, setOnlyNew] = useState(false);
+  const [failedCoverKeys, setFailedCoverKeys] = useState<Set<string>>(() => new Set());
   const [settings] = useSettings();
+  const markCoverFailed = useCallback((item: BoardFetchResult['items'][number]) => {
+    const key = coverFailureKey(item);
+    setFailedCoverKeys((previous) => {
+      if (previous.has(key)) return previous;
+      return new Set(previous).add(key);
+    });
+  }, []);
   // 聚合页在后台用第一个榜预热 useBoard,切到单榜即秒开
   const activeBoard: BoardId = active === 'all' ? 'weibo' : active;
   const { state, loading, reload } = useBoard(activeBoard, snap);
@@ -413,6 +440,23 @@ export default function BoardsPage() {
 
   const trendAt = snap ? (snap.boardAt?.[activeBoard] ?? snap.generatedAt) : null;
 
+  // 没有任何实拍图的渠道整块隐藏(如小红书),避免点进去是空榜
+  const photoBoards = useMemo(
+    () =>
+      snap
+        ? BOARDS.filter((b) =>
+            (snap.boards[b.id] ?? []).some(
+              (it) => it.cover && !failedCoverKeys.has(coverFailureKey(it)),
+            ),
+          )
+        : BOARDS,
+    [snap, failedCoverKeys],
+  );
+
+  useEffect(() => {
+    if (active !== 'all' && snap && !photoBoards.some((b) => b.id === active)) setActive('all');
+  }, [active, snap, photoBoards]);
+
   const prevRanks = useMemo(() => {
     if (!snap || trendAt == null || state?.from !== 'live') return null;
     if (Date.now() - trendAt > TREND_MAX_AGE) return null;
@@ -421,14 +465,16 @@ export default function BoardsPage() {
     return new Map(previous.map((item, index) => [item.url, index + 1]));
   }, [snap, activeBoard, trendAt, state?.from]);
 
-  // 全局排除词在展示层过滤,排名顺延(屏蔽词功能)
+  // 只展示有实拍图的条目;排除词在展示层过滤,排名顺延
   const visibleItems = useMemo(() => {
-    const items = state?.items ?? [];
+    const items = (state?.items ?? []).filter(
+      (it) => Boolean(it.cover) && !failedCoverKeys.has(coverFailureKey(it)),
+    );
     if (!excludeActive) return items;
     return items.filter(
       (it) => !matchesExclude(`${it.title} ${it.extra ?? ''}`, settings.globalExclude),
     );
-  }, [state, excludeActive, settings.globalExclude]);
+  }, [state, excludeActive, settings.globalExclude, failedCoverKeys]);
 
   const newCount = useMemo(() => {
     if (!prevRanks || !state) return 0;
@@ -463,7 +509,7 @@ export default function BoardsPage() {
         >
           <FlameIcon className="mr-0.5 inline size-3.5" /> 聚合
         </button>
-        {BOARDS.map((b) => {
+        {photoBoards.map((b) => {
           const on = b.id === active;
           return (
             <button
@@ -526,7 +572,14 @@ export default function BoardsPage() {
       )}
 
       {/* 聚合总览 */}
-      {active === 'all' && <AggregateView snap={snap} />}
+      {active === 'all' && (
+        <AggregateView
+          snap={snap}
+          boards={photoBoards}
+          failedCoverKeys={failedCoverKeys}
+          onCoverFail={markCoverFailed}
+        />
+      )}
 
       {/* 单个榜单 */}
       {active !== 'all' && (
@@ -541,7 +594,7 @@ export default function BoardsPage() {
             </span>
             {state && (
               <span className="ml-auto font-mono text-xs font-extrabold text-muted">
-                {onlyNew || excludeActive
+                {rows.length !== state.items.length
                   ? `${rows.length}/${state.items.length}`
                   : state.items.length}{' '}
                 条
@@ -563,8 +616,20 @@ export default function BoardsPage() {
           {state && state.items.length > 0 && rows.length === 0 && (
             <EmptyState
               icon={<FlameIcon className="size-7" />}
-              title={onlyNew ? '这次没有新上榜' : '全部条目都被排除词过滤了'}
-              desc={onlyNew ? '关闭筛选,查看完整榜单' : '调整设置中的全局排除词,或查看其他榜单'}
+              title={
+                onlyNew
+                  ? '这次没有新上榜'
+                  : excludeActive
+                    ? '全部条目都被排除词过滤了'
+                    : '这个榜单暂时没有带图热点'
+              }
+              desc={
+                onlyNew
+                  ? '关闭筛选,查看完整榜单'
+                  : excludeActive
+                    ? '调整设置中的全局排除词,或查看其他榜单'
+                    : '只展示有实拍图的条目'
+              }
               action={
                 onlyNew ? (
                   <Button size="sm" onClick={() => setOnlyNew(false)}>
@@ -585,6 +650,7 @@ export default function BoardsPage() {
                   maxHeat={maxHeat}
                   prevRank={prevRank}
                   trendReady={Boolean(prevRanks)}
+                  onCoverFail={() => markCoverFailed(item)}
                 />
               ))}
             </div>

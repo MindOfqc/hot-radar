@@ -3,6 +3,7 @@ import type { Settings } from '../types';
 import { BOARDS, fetchBoard } from '../lib/boards';
 import { testApiKey } from '../lib/ai';
 import { clearAll, downloadFile, exportAll, importAll, useSettings } from '../lib/storage';
+import { API_PRESETS, getApiBase, resetApiBase, setApiBase } from '../lib/api';
 import { Button, Card, Input, SectionTitle, Spinner, Toggle } from '../components/ui';
 import {
   BellIcon,
@@ -292,6 +293,120 @@ function SettingsDataCard() {
   );
 }
 
+function SettingsAccountLineCard() {
+  const current = getApiBase();
+  const [testing, setTesting] = useState('');
+  const [result, setResult] = useState<{ id: string; ok: boolean; text: string } | null>(null);
+
+  async function test(id: string, base: string) {
+    if (testing) return;
+    setTesting(id);
+    setResult(null);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(`${base}/api/health`, { signal: controller.signal });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+      setResult({
+        id,
+        ok: res.ok && data?.ok === true,
+        text: res.ok && data?.ok === true ? '连接正常' : '服务返回异常',
+      });
+    } catch {
+      setResult({ id, ok: false, text: '连接失败，换一条线路试试' });
+    } finally {
+      window.clearTimeout(timer);
+      setTesting('');
+    }
+  }
+
+  function choose(base: string) {
+    setApiBase(base);
+    window.location.reload();
+  }
+
+  return (
+    <Card className="p-5">
+      <div className="mb-3.5 flex items-center gap-2.5">
+        <HeadIcon bg="bg-yellow-soft" rotate="rotate-3">
+          <ShieldIcon className="size-5" />
+        </HeadIcon>
+        <h3 className="text-sm font-black">账号服务线路</h3>
+      </div>
+      <p className="mb-3 text-xs font-semibold leading-relaxed text-muted">
+        登录、对话室和数据看板由独立账号服务提供。如果提示网络不通，切换一条线路再试。
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {API_PRESETS.map((preset) => {
+          const active = current === preset.base;
+          return (
+            <div
+              key={preset.id}
+              className={`rounded-btn border-[2.5px] px-3 py-2.5 ${
+                active ? 'border-ink bg-yellow-soft' : 'border-ink/20 bg-paper'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-[13px] font-black text-ink">{preset.label}</span>
+                {active && (
+                  <span className="rounded-full border-toon-sm bg-yellow px-1.5 py-px text-[9px] font-black">
+                    当前
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 truncate font-mono text-[9px] font-bold text-muted">
+                {preset.base.replace(/^https?:\/\//, '')}
+              </p>
+              <div className="mt-2 flex gap-1.5">
+                <Button
+                  size="sm"
+                  variant={active ? 'secondary' : 'outline'}
+                  onClick={() => choose(preset.base)}
+                >
+                  使用
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={testing !== ''}
+                  onClick={() => void test(preset.id, preset.base)}
+                >
+                  {testing === preset.id ? <Spinner className="size-3.5" /> : <RefreshIcon className="size-3.5" />}
+                  测试
+                </Button>
+              </div>
+              {result?.id === preset.id && (
+                <p
+                  role="status"
+                  className={`mt-1.5 text-[10px] font-bold ${result.ok ? 'text-ok' : 'text-danger'}`}
+                >
+                  {result.ok ? '✓ ' : '✕ '}
+                  {result.text}
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            resetApiBase();
+            window.location.reload();
+          }}
+        >
+          <RefreshIcon className="size-3.5" /> 恢复默认
+        </Button>
+        {!current && (
+          <span className="text-[10px] font-bold text-muted">当前使用本地开发代理</span>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 function SettingsSourcesCard() {
   const [checks, setChecks] = useState<SourceCheck[] | null>(null);
   const [running, setRunning] = useState(false);
@@ -402,6 +517,7 @@ export default function SettingsPage() {
       <SettingsScanCard settings={settings} setSettings={setSettings} />
       <SettingsNotifyCard settings={settings} setSettings={setSettings} />
       <SettingsDataCard />
+      <SettingsAccountLineCard />
       <SettingsSourcesCard />
     </div>
   );
