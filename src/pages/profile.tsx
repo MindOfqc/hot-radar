@@ -239,11 +239,9 @@ export default function ProfilePage({ navigate }: { navigate: (to: string) => vo
               </div>
             </dl>
             <div className="mt-4 flex flex-wrap gap-2">
-              {auth.user.isAdmin && (
-                <Button size="sm" variant="secondary" onClick={() => navigate('dashboard')}>
-                  <ChartIcon className="size-3.5" /> 数据看板
-                </Button>
-              )}
+              <Button size="sm" variant="secondary" onClick={() => navigate('dashboard')}>
+                <ChartIcon className="size-3.5" /> 数据看板
+              </Button>
               <Button
                 size="sm"
                 variant="danger"

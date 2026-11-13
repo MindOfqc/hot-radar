@@ -1,7 +1,7 @@
 {
   "name": "hot-radar",
   "private": true,
-  "version": "2.0.8",
+  "version": "2.0.9",
   "type": "module",
   "description": "热点雷达 —— 纯前端的多平台热榜聚合与 AI 关键词监控面板",
   "scripts": {

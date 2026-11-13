@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { BoardId } from '../types';
 import {
   BOARDS,
@@ -218,31 +218,23 @@ function SkeletonRows() {
 
 /* ============ 聚合总览:各源 Top 10 一屏看完 ============ */
 
+type BoardResults = Partial<Record<BoardId, BoardFetchResult>>;
+
 function AggregateView({
   snap,
   boards,
+  results,
+  setResults,
   failedCoverKeys,
   onCoverFail,
 }: {
   snap: SnapshotFile | null;
   boards: BoardMeta[];
+  results: BoardResults;
+  setResults: Dispatch<SetStateAction<BoardResults>>;
   failedCoverKeys: Set<string>;
   onCoverFail: (item: BoardFetchResult['items'][number]) => void;
 }) {
-  const [results, setResults] = useState<Partial<Record<BoardId, BoardFetchResult>>>(() => {
-    const seed: Partial<Record<BoardId, BoardFetchResult>> = {};
-    for (const b of BOARDS) {
-      if (!cache.has(b.id)) {
-        const local = loadBoardCache(b.id);
-        if (local) cache.set(b.id, local);
-      }
-      const c = cache.get(b.id);
-      const s = snapshotBoardResult(snap, b.id);
-      if (c && c.items.length > 0) seed[b.id] = c;
-      else if (s) seed[b.id] = s;
-    }
-    return seed;
-  });
   const [loading, setLoading] = useState(false);
   const [settings] = useSettings();
   const exclude = settings.globalExclude;
@@ -325,12 +317,8 @@ function AggregateView({
     };
   }, [load]);
 
-  const liveCount = Object.values(results).filter(
-    (r) => r?.from === 'live' && r.items.length > 0,
-  ).length;
-  const snapshotCount = Object.values(results).filter(
-    (r) => r?.from === 'snapshot' && r.items.length > 0,
-  ).length;
+  const liveCount = boards.filter((board) => (cache.get(board.id) ?? results[board.id])?.from === 'live').length;
+  const snapshotCount = boards.filter((board) => (cache.get(board.id) ?? results[board.id])?.from === 'snapshot').length;
 
   return (
     <Card>
@@ -341,7 +329,7 @@ function AggregateView({
         <span className="text-[17px] font-black">聚合总览</span>
         <span className="font-mono text-[10px] font-black tracking-[2px] text-muted">ALL-IN-ONE</span>
         <span className="font-mono text-xs font-extrabold text-muted" aria-live="polite">
-          实时 {liveCount}/{BOARDS.length}
+          实时 {liveCount}/{boards.length}
           {snapshotCount > 0 ? ` · 快照 ${snapshotCount}` : ''}
         </span>
         <Button variant="secondary" size="sm" className="ml-auto" onClick={() => void load(true)} disabled={loading}>
@@ -351,7 +339,7 @@ function AggregateView({
       </div>
 
       {boards.map((b) => {
-        const r = results[b.id];
+        const r = cache.get(b.id) ?? results[b.id];
         const all = applySnapshotCovers(r?.items ?? [], snap?.boards[b.id]).filter(
           (it) => Boolean(it.cover) && !failedCoverKeys.has(coverFailureKey(it)),
         );
@@ -359,6 +347,7 @@ function AggregateView({
           ? all.filter((it) => !matchesExclude(`${it.title} ${it.extra ?? ''}`, exclude))
           : all;
         const top = items.slice(0, 10);
+        if (top.length === 0) return null;
         const maxHeat = Math.max(0, ...top.map((i) => i.heat ?? 0));
         return (
           <section key={b.id} className="border-b-[3px] border-dashed border-ink/15 last:border-0">
@@ -388,11 +377,6 @@ function AggregateView({
                 onCoverFail={() => onCoverFail(item)}
               />
             ))}
-            {r && top.length === 0 && (
-              <p className="px-5 pb-3 text-xs font-bold text-muted">
-                {r.error ? `拉取失败:${r.error}` : '暂无可展示内容'}
-              </p>
-            )}
           </section>
         );
       })}
@@ -408,6 +392,18 @@ export default function BoardsPage() {
   const [onlyNew, setOnlyNew] = useState(false);
   const [failedCoverKeys, setFailedCoverKeys] = useState<Set<string>>(() => new Set());
   const [settings] = useSettings();
+  const [results, setResults] = useState<BoardResults>(() => {
+    const seed: BoardResults = {};
+    for (const b of BOARDS) {
+      if (!cache.has(b.id)) {
+        const local = loadBoardCache(b.id);
+        if (local) cache.set(b.id, local);
+      }
+      const c = cache.get(b.id);
+      if (c && c.items.length > 0) seed[b.id] = c;
+    }
+    return seed;
+  });
   const markCoverFailed = useCallback((item: BoardFetchResult['items'][number]) => {
     const key = coverFailureKey(item);
     setFailedCoverKeys((previous) => {
@@ -440,30 +436,33 @@ export default function BoardsPage() {
 
   const trendAt = snap ? (snap.boardAt?.[activeBoard] ?? snap.generatedAt) : null;
 
-  // 没有任何实拍图的渠道整块隐藏(如小红书),避免点进去是空榜
   const photoBoards = useMemo(
-    () =>
-      snap
-        ? BOARDS.filter((b) =>
-            (snap.boards[b.id] ?? []).some(
-              (it) => it.cover && !failedCoverKeys.has(coverFailureKey(it)),
-            ),
-          )
-        : BOARDS,
-    [snap, failedCoverKeys],
+    () => BOARDS.filter((b) => {
+      const result = active !== 'all' && b.id === activeBoard
+        ? state
+        : cache.get(b.id) ?? results[b.id];
+      const items = applySnapshotCovers(result?.items ?? snap?.boards[b.id] ?? [], snap?.boards[b.id]);
+      return items.some((item) => item.cover && !failedCoverKeys.has(coverFailureKey(item)));
+    }),
+    [active, activeBoard, state, results, snap, failedCoverKeys],
   );
 
   useEffect(() => {
-    if (active !== 'all' && snap && !photoBoards.some((b) => b.id === active)) setActive('all');
-  }, [active, snap, photoBoards]);
+    if (active !== 'all' && state && !loading && !photoBoards.some((b) => b.id === active)) {
+      setActive('all');
+    }
+  }, [active, state, loading, photoBoards]);
 
   const prevRanks = useMemo(() => {
     if (!snap || trendAt == null || state?.from !== 'live') return null;
     if (Date.now() - trendAt > TREND_MAX_AGE) return null;
-    const previous = snap.boards[activeBoard];
+    const previous = snap.boards[activeBoard]?.filter(
+      (item) => item.cover && !failedCoverKeys.has(coverFailureKey(item)) &&
+        (!excludeActive || !matchesExclude(`${item.title} ${item.extra ?? ''}`, settings.globalExclude)),
+    );
     if (!previous?.length) return null;
     return new Map(previous.map((item, index) => [item.url, index + 1]));
-  }, [snap, activeBoard, trendAt, state?.from]);
+  }, [snap, activeBoard, trendAt, state?.from, failedCoverKeys, excludeActive, settings.globalExclude]);
 
   // 只展示有实拍图的条目;排除词在展示层过滤,排名顺延
   const visibleItems = useMemo(() => {
@@ -576,6 +575,8 @@ export default function BoardsPage() {
         <AggregateView
           snap={snap}
           boards={photoBoards}
+          results={results}
+          setResults={setResults}
           failedCoverKeys={failedCoverKeys}
           onCoverFail={markCoverFailed}
         />

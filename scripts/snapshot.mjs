@@ -168,15 +168,9 @@ async function saveCoverImage(url, boardId) {
   const dir = join(COVERS_DIR, boardId);
   await mkdir(dir, { recursive: true });
   const name = `${coverHash(url)}.jpg`;
-  // GitHub 分享卡是 2:1 的文字横幅,居中裁切会把标题切成半截,整张缩进留白更可读
-  const isCard = new URL(url).hostname === 'opengraph.githubassets.com';
   await sharp(buffer, { failOn: 'none' })
     .rotate()
-    .resize(
-      COVER_SIZE,
-      COVER_SIZE,
-      isCard ? { fit: 'contain', background: '#f6f8fa' } : { fit: 'cover' },
-    )
+    .resize(COVER_SIZE, COVER_SIZE, { fit: 'cover' })
     .jpeg({ quality: COVER_QUALITY })
     .toFile(join(dir, name));
   return `${COVER_PREFIX}${boardId}/${name}`;
@@ -639,7 +633,7 @@ async function fetchTiebaDirect() {
   });
 }
 
-/** YouTube / GitHub 有稳定的官方图床,不必抓页面 */
+/** YouTube 视频封面无需抓取页面 */
 function directArticleImage(pageUrl) {
   try {
     const url = new URL(pageUrl);
@@ -651,12 +645,6 @@ function directArticleImage(pageUrl) {
       const id = url.searchParams.get('v') ?? url.pathname.split('/').filter(Boolean).pop();
       if (id && /^[\w-]{11}$/.test(id)) return safeUrl(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`);
     }
-    if (/(^|\.)github\.com$/.test(url.hostname)) {
-      const parts = url.pathname.split('/').filter(Boolean);
-      if (parts.length >= 2) {
-        return safeUrl(`https://opengraph.githubassets.com/1/${parts.slice(0, 2).join('/')}`);
-      }
-    }
   } catch {
     /* 非标准链接交给页面抓取 */
   }
@@ -665,6 +653,7 @@ function directArticleImage(pageUrl) {
 
 /** 抓文章页的 og:image / twitter:image,给 Hacker News 这类纯文字榜单补配图 */
 async function fetchPageOgImage(pageUrl) {
+  if (/(^|\.)github\.com$/.test(new URL(pageUrl).hostname)) return undefined;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 10_000);
   try {

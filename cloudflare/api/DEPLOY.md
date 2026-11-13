@@ -102,7 +102,7 @@ CORS 白名单（不使用 cookie，登录态只走 `Authorization: Bearer`）�
 
 ## 七、管理员规则
 
-- 管理员由 `wrangler.toml` 的 `[vars] ADMIN_NICKNAME` 指定，当前为 `ordeal`，全站只有这一个账号能看数据看板。
+- 管理员由 `wrangler.toml` 的 `[vars] ADMIN_NICKNAME` 指定，当前为 `ordeal`，全站只有这一个账号能看全站统计。
 - 首次解析时，Worker 找出**唯一**持有该昵称的账号，把它的 id 写进 D1 的 `hr_meta`（`key = admin_user_id`）。此后权限只认这个 id：该账号改名仍是管理员，其他人注册或改名成 `ordeal` 会被 `409 nickname_reserved` 拒绝。
 - 若同昵称账号不止一个，则谁都不是管理员（fail closed）。需要换管理员时，删除 `hr_meta` 中 `admin_user_id` 一行并重新部署，让新昵称的唯一持有者重新认领：
   ```bash
@@ -111,7 +111,8 @@ CORS 白名单（不使用 cookie，登录态只走 `Authorization: Bearer`）�
 - 旧的 `ADMIN_EMAIL` 邮箱白名单与 `hr_users.is_admin` 已废弃，历史值不再授予任何权限。
 - 本地开发在 `.dev.vars` 里写 `ADMIN_NICKNAME=ordeal`，用该昵称注册一个账号即可看到看板。
 - 修改后需重新部署（本地重启 `wrangler dev`）。
-- 只有管理员能访问 `GET /api/admin/stats`，其他账号返回 `403 forbidden`。普通用户看不到入口，也不会拿到数据。
+- 只有管理员能访问 `GET /api/admin/stats`，其他账号返回 `403 forbidden`。普通用户的看板只渲染热榜平台概览（来自静态快照），不会请求统计接口。
+- `GET /api/chat` 与 `POST /api/chat` 返回的每条消息带服务端计算的 `isAdmin`，前端据此给管理员发言加徽章；该字段只认绑定的 id，改昵称无法伪造。
 
 ## 八、本地开发
 

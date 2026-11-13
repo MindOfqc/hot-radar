@@ -2740,7 +2740,6 @@
         "heat": 493,
         "heatLabel": "493 分",
         "extra": "178 评论 · @simpsoka",
-        "cover": "covers/hackernews/15c058077ce1bdf3.jpg",
         "source": "hackernews"
       },
       {
@@ -2758,7 +2757,6 @@
         "heat": 353,
         "heatLabel": "353 分",
         "extra": "127 评论 · @mrashad74",
-        "cover": "covers/hackernews/c52fd0f3b40a0f5a.jpg",
         "source": "hackernews"
       },
       {
@@ -2871,7 +2869,6 @@
         "heat": 98,
         "heatLabel": "98 分",
         "extra": "28 评论 · @miguelrios",
-        "cover": "covers/hackernews/6a194be635b6f4ae.jpg",
         "source": "hackernews"
       },
       {
@@ -2938,7 +2935,6 @@
         "heat": 22,
         "heatLabel": "22 分",
         "extra": "3 评论 · @koljab",
-        "cover": "covers/hackernews/ea2463465de3f38d.jpg",
         "source": "hackernews"
       }
     ]

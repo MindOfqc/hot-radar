@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 
-/** 只渲染真实封面;没有图或加载失败时不占位,由调用方决定整行是否隐藏 */
 export function CoverThumb({
   cover,
   size = 'size-10',

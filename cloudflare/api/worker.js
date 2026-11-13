@@ -655,6 +655,7 @@ async function chatList(request, env, url) {
     .bind(limit)
     .all();
 
+  const adminId = await adminUserId(env);
   const messages = (result.results || []).reverse().map((row) => ({
     id: row.id,
     userId: row.user_id,
@@ -662,6 +663,7 @@ async function chatList(request, env, url) {
     avatar: row.avatar || "",
     content: row.content,
     createdAt: row.created_at,
+    isAdmin: row.user_id === adminId,
   }));
   return json({ messages, now: new Date().toISOString() });
 }
@@ -715,7 +717,7 @@ async function chatCreate(request, env) {
       message.createdAt,
     )
     .run();
-  return json({ message }, 201);
+  return json({ message: { ...message, isAdmin: auth.isAdmin } }, 201);
 }
 
 /* ---------------- 管理员统计（仅 admin） ---------------- */

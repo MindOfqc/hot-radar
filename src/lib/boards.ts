@@ -384,7 +384,9 @@ export function applySnapshotCovers(
   }
   return items.map((item) => {
     const cover = byUrl.get(item.url) ?? byTitle.get(item.title);
-    if (!cover) return item;
+    const localCover = item.cover?.startsWith('covers/') ||
+      item.cover?.startsWith(`${import.meta.env.BASE_URL}covers/`);
+    if (cover === item.cover || (!cover && !localCover)) return item;
     return { ...item, cover };
   });
 }

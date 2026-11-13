@@ -4,7 +4,7 @@ import { api, type ChatMessage } from '../lib/api';
 import { AuthRequired } from '../components/auth-required';
 import { Avatar } from '../components/avatar';
 import { Button, Card, EmptyState, Spinner } from '../components/ui';
-import { ChatIcon, RefreshIcon, SendIcon } from '../components/icons';
+import { ChatIcon, RefreshIcon, SendIcon, ShieldIcon } from '../components/icons';
 
 function chatTime(value: string): string {
   const date = new Date(value);
@@ -190,13 +190,21 @@ export default function ChatPage({ navigate }: { navigate: (to: string) => void 
                         }`}
                       >
                         <span className="font-black text-ink-soft">{mine ? '我' : message.nickname}</span>
+                        {message.isAdmin && (
+                          <span className="inline-flex items-center gap-0.5 self-center rounded-full border-toon-sm bg-yellow px-1.5 py-px text-[10px] font-black text-ink">
+                            <ShieldIcon className="size-3" />
+                            管理员
+                          </span>
+                        )}
                         <span className="font-mono text-[10px]">{chatTime(message.createdAt)}</span>
                       </div>
                       <div
                         className={`inline-block whitespace-pre-wrap break-words rounded-[16px_18px_16px_20px] border-[2.5px] px-3.5 py-2 text-left text-[13px] font-semibold leading-relaxed ${
-                          mine
-                            ? 'border-ink/80 bg-accent-soft text-ink'
-                            : 'border-ink/25 bg-paper text-ink-soft'
+                          message.isAdmin
+                            ? 'border-ink bg-yellow-soft text-ink shadow-toon-sm'
+                            : mine
+                              ? 'border-ink/80 bg-accent-soft text-ink'
+                              : 'border-ink/25 bg-paper text-ink-soft'
                         }`}
                       >
                         {message.content}

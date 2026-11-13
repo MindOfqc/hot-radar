@@ -159,11 +159,9 @@ export default function AuthPage({
             <Button variant="primary" onClick={() => navigate('profile')}>
               <UserIcon className="size-4" /> 个人资料
             </Button>
-            {auth.user.isAdmin && (
-              <Button variant="secondary" onClick={() => navigate('dashboard')}>
-                <KeyIcon className="size-4" /> 数据看板
-              </Button>
-            )}
+            <Button variant="secondary" onClick={() => navigate('dashboard')}>
+              <KeyIcon className="size-4" /> 数据看板
+            </Button>
             <Button onClick={() => navigate('boards')}>去看看热榜</Button>
           </div>
           <button
@@ -336,7 +334,7 @@ export default function AuthPage({
       </Card>
 
       <p className="px-2 text-center text-xs font-semibold leading-relaxed text-muted">
-        登录后可以保存个人资料、进入对话室；管理员还能查看数据看板。
+        登录后可以保存个人资料、进入对话室、查看数据看板。
       </p>
     </div>
   );

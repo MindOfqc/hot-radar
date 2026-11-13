@@ -71,6 +71,7 @@ export interface ChatMessage {
   avatar: string;
   content: string;
   createdAt: string;
+  isAdmin: boolean;
 }
 
 export interface TrendPoint {

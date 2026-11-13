@@ -25,7 +25,6 @@ type NavItem = {
   id: PageId;
   label: string;
   icon: (p: { className?: string }) => ReactNode;
-  adminOnly?: boolean;
 };
 
 const DESKTOP_NAV: NavItem[] = [
@@ -33,7 +32,7 @@ const DESKTOP_NAV: NavItem[] = [
   { id: 'monitor', label: '关键词监控', icon: TargetIcon },
   { id: 'search', label: '全网搜索', icon: SearchIcon },
   { id: 'chat', label: '对话室', icon: ChatIcon },
-  { id: 'dashboard', label: '数据看板', icon: ChartIcon, adminOnly: true },
+  { id: 'dashboard', label: '数据看板', icon: ChartIcon },
   { id: 'settings', label: '设置', icon: GearIcon },
 ];
 
@@ -268,18 +267,16 @@ function UserMenu({ navigate }: { navigate: (to: string) => void }) {
             >
               <ChatIcon className="size-4" /> 对话室
             </button>
-            {auth.user.isAdmin && (
-              <button
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  navigate('dashboard');
-                }}
-                className="flex w-full cursor-pointer items-center gap-2 rounded-btn px-3 py-2 text-left text-[13px] font-bold text-ink-soft transition-colors hover:bg-yellow-soft hover:text-ink"
-              >
-                <ChartIcon className="size-4" /> 数据看板
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                navigate('dashboard');
+              }}
+              className="flex w-full cursor-pointer items-center gap-2 rounded-btn px-3 py-2 text-left text-[13px] font-bold text-ink-soft transition-colors hover:bg-yellow-soft hover:text-ink"
+            >
+              <ChartIcon className="size-4" /> 数据看板
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -379,7 +376,6 @@ export function Shell({
 }) {
   const meta = PAGE_TITLES[page];
   const auth = useAuth();
-  const desktopNav = DESKTOP_NAV.filter((item) => !item.adminOnly || auth.user?.isAdmin);
 
   return (
     <div className="flex min-h-screen bg-paper text-ink">
@@ -412,7 +408,7 @@ export function Shell({
         </div>
 
         <nav className="flex-1 space-y-2 overflow-y-auto px-3.5">
-          {desktopNav.map((item) => {
+          {DESKTOP_NAV.map((item) => {
             const Icon = item.icon;
             const active = page === item.id;
             return (

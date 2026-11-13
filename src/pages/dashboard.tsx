@@ -67,6 +67,7 @@ export default function DashboardPage({ navigate }: { navigate: (to: string) => 
   const [error, setError] = useState('');
   const [snap, setSnap] = useState<SnapshotFile | null>(null);
   const [snapLoaded, setSnapLoaded] = useState(false);
+  const [failedCovers, setFailedCovers] = useState<Set<string>>(() => new Set());
 
   const isAdmin = Boolean(auth.user?.isAdmin);
 
@@ -140,7 +141,9 @@ export default function DashboardPage({ navigate }: { navigate: (to: string) => 
 
   const boards = useMemo(() => {
     return BOARDS.map((meta) => {
-      const items = snap?.boards[meta.id] ?? [];
+      const items = (snap?.boards[meta.id] ?? []).filter(
+        (item) => item.cover && !failedCovers.has(item.cover),
+      );
       const top = items[0];
       const maxHeat = Math.max(0, ...items.map((item) => item.heat ?? 0));
       return {
@@ -151,8 +154,8 @@ export default function DashboardPage({ navigate }: { navigate: (to: string) => 
         at: snap?.boardAt?.[meta.id] ?? snap?.generatedAt,
         heat: items.reduce((sum, item) => sum + (item.heat ?? 0), 0),
       };
-    }).sort((a, b) => b.heat - a.heat);
-  }, [snap]);
+    }).filter((board) => board.items.length > 0).sort((a, b) => b.heat - a.heat);
+  }, [snap, failedCovers]);
 
   const totalItems = useMemo(() => boards.reduce((sum, board) => sum + board.items.length, 0), [boards]);
   const latestAt = useMemo(() => {
@@ -176,23 +179,91 @@ export default function DashboardPage({ navigate }: { navigate: (to: string) => 
     return <AuthRequired navigate={navigate} next="dashboard" title="登录后查看看板" />;
   }
 
-  if (!auth.user.isAdmin) {
-    return (
-      <div className="mx-auto max-w-lg animate-rise">
-        <Card className="p-7 text-center">
-          <span className="mx-auto grid size-14 -rotate-6 place-items-center rounded-blob-1 border-toon bg-blue-soft shadow-toon-sm">
-            <ShieldIcon className="size-7 text-blue" />
-          </span>
-          <h2 className="mt-4 text-xl font-black">这里仅管理员可见</h2>
-          <p className="mt-1 text-[13px] font-semibold leading-relaxed text-muted">
-            数据看板包含全站账号与活动统计。想了解热榜动态，可以先回总览页。
-          </p>
-          <Button variant="primary" className="mt-5" onClick={() => navigate('boards')}>
-            返回热榜总览
-          </Button>
-        </Card>
+  const sourcePulse = (
+    <Card>
+      <div className="flex flex-wrap items-center gap-2 border-b-[3px] border-dashed border-ink/20 px-5 pb-3 pt-4">
+        <span className="grid size-9 -rotate-6 place-items-center rounded-blob-1 border-toon bg-accent-soft shadow-toon-sm">
+          <FlameIcon className="size-5" />
+        </span>
+        <div>
+          <h3 className="text-sm font-black leading-tight">热榜平台概览</h3>
+          <p className="font-mono text-[9px] font-black tracking-[1.5px] text-muted">SOURCE PULSE</p>
+        </div>
+        <span className="ml-auto text-[11px] font-bold text-muted">
+          {snap
+            ? `${boards.length} 个平台 · ${totalItems} 条 · ${latestAt ? relativeTime(latestAt) : '—'}更新`
+            : '正在读取最新快照…'}
+        </span>
       </div>
-    );
+
+      {!snapLoaded ? (
+        <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div key={index} className="h-24 animate-pulse rounded-card bg-paper" />
+          ))}
+        </div>
+      ) : !snap ? (
+        <p className="px-5 py-10 text-center text-xs font-bold text-muted">
+          最新快照暂时不可用，稍后再刷新看看。
+        </p>
+      ) : (
+        <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
+          {boards.map((board) => (
+            <div key={board.meta.id} className="rounded-card border-[2.5px] border-ink/20 bg-paper p-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[12px] font-black text-ink">{board.meta.name}</span>
+                <span className="font-mono text-[9px] font-black tracking-[1px] text-muted">
+                  {board.meta.en.toUpperCase()}
+                </span>
+                <span className="ml-auto font-mono text-[10px] font-bold text-muted">
+                  {board.items.length} 条
+                </span>
+              </div>
+              {board.top ? (
+                <a
+                  href={board.top.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group mt-2 flex items-start gap-2"
+                >
+                  <CoverThumb
+                    cover={board.top.cover}
+                    size="size-9"
+                    onFail={() => {
+                      const cover = board.top?.cover;
+                      if (cover) setFailedCovers((previous) => new Set(previous).add(cover));
+                    }}
+                  />
+                  <span className="line-clamp-2 min-w-0 flex-1 text-[11px] font-bold leading-snug text-ink-soft group-hover:text-accent-deep">
+                    {board.top.title}
+                    <ExternalIcon className="ml-0.5 inline size-2.5 opacity-0 transition-opacity group-hover:opacity-100" />
+                  </span>
+                </a>
+              ) : (
+                <p className="mt-2 text-[11px] font-bold text-muted">暂无快照</p>
+              )}
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <HeatBar
+                    ratio={board.top?.heat && board.maxHeat > 0 ? board.top.heat / board.maxHeat : 0}
+                    label={board.top?.heatLabel ?? formatCount(board.top?.heat) ?? '—'}
+                  />
+                </div>
+                {board.at && (
+                  <span className="shrink-0 font-mono text-[9px] font-bold text-muted">
+                    {formatDateTime(board.at).slice(5, 16)}
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+
+  if (!auth.user.isAdmin) {
+    return <div className="mx-auto max-w-5xl animate-rise space-y-4">{sourcePulse}</div>;
   }
 
   return (
@@ -386,82 +457,10 @@ export default function DashboardPage({ navigate }: { navigate: (to: string) => 
               )}
             </Card>
           </div>
-
-          <Card>
-            <div className="flex flex-wrap items-center gap-2 border-b-[3px] border-dashed border-ink/20 px-5 pb-3 pt-4">
-              <span className="grid size-9 -rotate-6 place-items-center rounded-blob-1 border-toon bg-accent-soft shadow-toon-sm">
-                <FlameIcon className="size-5" />
-              </span>
-              <div>
-                <h3 className="text-sm font-black leading-tight">热榜平台概览</h3>
-                <p className="font-mono text-[9px] font-black tracking-[1.5px] text-muted">SOURCE PULSE</p>
-              </div>
-              <span className="ml-auto text-[11px] font-bold text-muted">
-                {snap
-                  ? `${BOARDS.length} 个平台 · ${totalItems} 条 · ${latestAt ? relativeTime(latestAt) : '—'}更新`
-                  : '正在读取最新快照…'}
-              </span>
-            </div>
-
-            {!snapLoaded ? (
-              <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
-                {Array.from({ length: 6 }).map((_, index) => (
-                  <div key={index} className="h-24 animate-pulse rounded-card bg-paper" />
-                ))}
-              </div>
-            ) : !snap ? (
-              <p className="px-5 py-10 text-center text-xs font-bold text-muted">
-                最新快照暂时不可用，稍后再刷新看看。
-              </p>
-            ) : (
-              <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
-                {boards.map((board) => (
-                  <div key={board.meta.id} className="rounded-card border-[2.5px] border-ink/20 bg-paper p-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[12px] font-black text-ink">{board.meta.name}</span>
-                      <span className="font-mono text-[9px] font-black tracking-[1px] text-muted">
-                        {board.meta.en.toUpperCase()}
-                      </span>
-                      <span className="ml-auto font-mono text-[10px] font-bold text-muted">
-                        {board.items.length} 条
-                      </span>
-                    </div>
-                    {board.top ? (
-                      <a
-                        href={board.top.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="group mt-2 flex items-start gap-2"
-                      >
-                        <CoverThumb cover={board.top.cover} size="size-9" />
-                        <span className="line-clamp-2 min-w-0 flex-1 text-[11px] font-bold leading-snug text-ink-soft group-hover:text-accent-deep">
-                          {board.top.title}
-                          <ExternalIcon className="ml-0.5 inline size-2.5 opacity-0 transition-opacity group-hover:opacity-100" />
-                        </span>
-                      </a>
-                    ) : (
-                      <p className="mt-2 text-[11px] font-bold text-muted">暂无快照</p>
-                    )}
-                    <div className="mt-2 flex items-center justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <HeatBar
-                          ratio={board.top?.heat && board.maxHeat > 0 ? board.top.heat / board.maxHeat : 0}
-                          label={board.top?.heatLabel ?? formatCount(board.top?.heat) ?? '—'}
-                        />
-                      </div>
-                      {board.at && (
-                        <span className="shrink-0 font-mono text-[9px] font-bold text-muted">
-                          {formatDateTime(board.at).slice(5, 16)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
         </>
       )}
+
+      {sourcePulse}
     </div>
   );
 }
