@@ -181,6 +181,7 @@ export default function ChatPage({ navigate }: { navigate: (to: string) => void 
                     <Avatar
                       person={{ nickname: message.nickname, avatar: message.avatar }}
                       size={32}
+                      admin={message.isAdmin}
                       className={mine ? 'rotate-3' : '-rotate-2'}
                     />
                     <div className={`min-w-0 max-w-[78%] ${mine ? 'text-right' : ''}`}>
@@ -189,13 +190,13 @@ export default function ChatPage({ navigate }: { navigate: (to: string) => void 
                           mine ? 'justify-end' : ''
                         }`}
                       >
-                        <span className="font-black text-ink-soft">{mine ? '我' : message.nickname}</span>
                         {message.isAdmin && (
-                          <span className="badge-admin animate-badge-pop inline-flex items-center gap-0.5 self-center rounded-full border-toon-sm bg-yellow px-1.5 py-px text-[10px] font-black text-ink">
-                            <ShieldIcon className="size-3" />
+                          <span className="badge-admin animate-badge-pop inline-flex items-center gap-1 self-center rounded-full border-toon-sm bg-yellow px-2 py-0.5 text-[11px] font-black text-ink shadow-toon-sm">
+                            <ShieldIcon className="size-3.5" />
                             管理员
                           </span>
                         )}
+                        <span className="font-black text-ink-soft">{mine ? '我' : message.nickname}</span>
                         <span className="font-mono text-[10px]">{chatTime(message.createdAt)}</span>
                       </div>
                       <div

@@ -152,23 +152,44 @@
   inset: 0;
   background: linear-gradient(
     105deg,
-    transparent 35%,
-    color-mix(in srgb, white 78%, transparent) 50%,
-    transparent 65%
+    transparent 32%,
+    color-mix(in srgb, white 88%, transparent) 50%,
+    transparent 68%
   );
   transform: translateX(-120%);
-  animation: badge-sweep 5.5s ease-in-out infinite;
+  animation: badge-sweep 3.8s ease-in-out infinite;
   pointer-events: none;
 }
 
 @keyframes badge-sweep {
   0%,
-  70% {
+  62% {
     transform: translateX(-120%);
   }
   88%,
   100% {
     transform: translateX(120%);
+  }
+}
+
+/* 管理员头像:黄色描边圈 + 右下角盾牌,盾牌只做 1.5px 的慢幅浮动 */
+@utility avatar-admin-frame {
+  box-shadow:
+    0 0 0 3px var(--color-yellow),
+    3px 3px 0 var(--color-ink);
+}
+
+@utility avatar-admin-corner {
+  animation: crown-bob 5.2s ease-in-out infinite;
+}
+
+@keyframes crown-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1.5px);
   }
 }
 
@@ -191,6 +212,7 @@
   .animate-float,
   .animate-rise,
   .animate-badge-pop,
+  .avatar-admin-corner,
   .badge-admin::after,
   .skeleton {
     animation: none !important;
