@@ -191,7 +191,7 @@ export default function ChatPage({ navigate }: { navigate: (to: string) => void 
                       >
                         <span className="font-black text-ink-soft">{mine ? '我' : message.nickname}</span>
                         {message.isAdmin && (
-                          <span className="inline-flex items-center gap-0.5 self-center rounded-full border-toon-sm bg-yellow px-1.5 py-px text-[10px] font-black text-ink">
+                          <span className="badge-admin animate-badge-pop inline-flex items-center gap-0.5 self-center rounded-full border-toon-sm bg-yellow px-1.5 py-px text-[10px] font-black text-ink">
                             <ShieldIcon className="size-3" />
                             管理员
                           </span>
