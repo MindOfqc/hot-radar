@@ -387,8 +387,12 @@ async function fetchZhihuDirect() {
 
 /** 微博访客态(无需账号):genvisitor + incarnate 拿到 SUB/SUBP */
 let weiboCookie = null;
+let weiboCookieTries = 0;
 async function getWeiboVisitorCookie() {
-  if (weiboCookie !== null) return weiboCookie;
+  if (weiboCookie) return weiboCookie;
+  // 失败不写死:一次网络抖动会让整榜 50 条全部跳过补图
+  if (weiboCookieTries >= 3) return '';
+  weiboCookieTries += 1;
   try {
     const form = new URLSearchParams({
       cb: 'gen_callback',
@@ -413,10 +417,12 @@ async function getWeiboVisitorCookie() {
     const subp = inc.match(/"subp":"([^"]+)"/)?.[1];
     if (!sub || !subp) throw new Error('没有 SUB');
     weiboCookie = `SUB=${sub}; SUBP=${subp}`;
-  } catch {
-    weiboCookie = '';
+  } catch (error) {
+    weiboCookie = null;
+    console.warn(`  微博访客态获取失败(第 ${weiboCookieTries} 次): ${error.message}`);
+    if (weiboCookieTries < 3) await sleep(2_000);
   }
-  return weiboCookie;
+  return weiboCookie ?? '';
 }
 
 function weiboStatusPic(status) {
@@ -427,7 +433,22 @@ function weiboStatusPic(status) {
   return safeUrl(info?.page_pic?.url ?? videoPic);
 }
 
-/** 微博热搜本身没有配图,用话题搜索结果首条带图微博补一张 */
+/** 归一化:去掉标点空白,便于判断微博正文是否真的在讲这个话题 */
+function normText(value) {
+  return String(value ?? '')
+    .replace(/[\s\p{P}\p{S}]/gu, '')
+    .toLowerCase();
+}
+
+/** 话题主词:空格分段里最长的一段,没有就取归一化前 8 字 */
+function corePhrase(title) {
+  const segments = String(title).split(/\s+/).filter((s) => s.length >= 4);
+  if (segments.length > 0) return segments.sort((a, b) => b.length - a.length)[0];
+  return normText(title).slice(0, 8);
+}
+
+/** 微博热搜本身没有配图,用话题搜索结果里"正文确实在讲这个话题"的微博补一张
+ * (只取首条带图微博会拿到 K 线图之类的无关内容) */
 async function fetchWeiboSearchCover(word) {
   const cookie = await getWeiboVisitorCookie();
   if (!cookie) return undefined;
@@ -437,25 +458,83 @@ async function fetchWeiboSearchCover(word) {
       { Referer: 'https://s.weibo.com/', Cookie: cookie },
       12_000,
     );
+    const full = normText(word);
+    const core = normText(corePhrase(word));
+    let best;
+    let bestScore = -1;
     for (const status of json?.statuses ?? []) {
       const cover = weiboStatusPic(status);
-      if (cover) return cover;
+      if (!cover) continue;
+      const text = normText(`${status.text ?? ''} ${status.title ?? ''}`);
+      if (core && !text.includes(core)) continue;
+      // 正文完整命中话题 > 带组图 > 搜索结果靠前
+      const score = (text.includes(full) ? 4 : 0) + (Number(status.pic_num) > 1 ? 1 : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = cover;
+      }
     }
+    return best;
   } catch {
     /* 访客态被限流时跳过补图 */
   }
   return undefined;
 }
 
-async function fetchWeibo() {
-  const items = await fetch60s('weibo', 'weibo');
-  const limitCover = createLimiter(2);
-  return Promise.all(
-    items.map(async (item) => {
-      const cover = await limitCover(() => fetchWeiboSearchCover(item.title));
-      return cover ? { ...item, cover } : item;
-    }),
+/** 微博热搜直连:访客态拿榜单 + 话题搜索补图,不依赖会被限流的 60s 聚合 */
+async function fetchWeiboDirect() {
+  const cookie = await getWeiboVisitorCookie();
+  if (!cookie) throw new Error('访客态不可用');
+  const json = await getJson(
+    'https://weibo.com/ajax/side/hotSearch',
+    { Referer: 'https://weibo.com/', Cookie: cookie },
+    12_000,
   );
+  const list = Array.isArray(json?.data?.realtime) ? json.data.realtime : [];
+  const items = list
+    .filter((entry) => typeof entry?.word === 'string' && entry.word.trim() && !entry.is_ad)
+    .map((entry) => {
+      const title = entry.word.trim();
+      const heat = Number(entry.num) || undefined;
+      return {
+        title,
+        url: `https://s.weibo.com/weibo?q=${encodeURIComponent(title)}`,
+        heat,
+        heatLabel: heat ? formatHeat(heat) : undefined,
+        extra: typeof entry.label_name === 'string' && entry.label_name.trim()
+          ? entry.label_name.trim()
+          : undefined,
+      };
+    });
+  if (items.length === 0) throw new Error('微博热搜列表为空');
+  return items;
+}
+
+async function fetchWeibo() {
+  const items = await fetchWeiboDirect();
+  const limitCover = createLimiter(2);
+  const used = new Set();
+  const fill = (list) =>
+    Promise.all(
+      list.map(async (item) => {
+        if (item.cover) return item;
+        const cover = await limitCover(() => fetchWeiboSearchCover(item.title));
+        // 同一张图在榜单里重复出现很像抓坏了,重复的直接当没补到
+        if (!cover || used.has(cover)) return item;
+        used.add(cover);
+        return { ...item, cover };
+      }),
+    );
+  let out = await fill(items);
+  if (out.every((item) => !item.cover)) {
+    console.warn('  微博补图 0 张,重置访客态后整体重试一次');
+    weiboCookie = null;
+    weiboCookieTries = 0;
+    await sleep(3_000);
+    out = await fill(out);
+  }
+  console.log(`  微博补图 ${out.filter((item) => item.cover).length}/${items.length} 张`);
+  return out;
 }
 
 function biliCoverPic(pic) {
@@ -747,7 +826,7 @@ async function loadPrevious() {
 
 // 每个源按顺序尝试多种抓取方式;直接上游优先,避免 60s 限流
 const jobs = [
-  { id: 'weibo', label: '微博+补图', run: fetchWeibo, fallback: () => fetch60s('weibo', 'weibo') },
+  { id: 'weibo', label: '微博直连+补图', run: fetchWeibo, fallback: () => fetch60s('weibo', 'weibo') },
   { id: 'zhihu', label: '知乎直连', run: fetchZhihuDirect, fallback: () => fetch60s('zhihu', 'zhihu') },
   { id: 'douyin', label: '抖音直连', run: fetchDouyinDirect, fallback: () => fetch60s('douyin', 'douyin') },
   { id: 'toutiao', label: '头条直连', run: fetchToutiaoDirect, fallback: () => fetch60s('toutiao', 'toutiao') },
@@ -779,6 +858,19 @@ for (const job of jobs) {
     } catch (error) {
       console.warn(`✗ ${job.id} · ${label}: ${error.message}`);
       await sleep(RETRY_DELAY);
+    }
+  }
+
+  if (items.length > 0) {
+    // 上一版有充足本地封面而这次一张没补到 = 补图链路整体故障,
+    // 直接沿用上次快照,否则前端"只显示带图热点"会让该榜凭空消失。
+    const prevItems = previous?.boards?.[job.id];
+    const prevCovers = Array.isArray(prevItems)
+      ? prevItems.filter((item) => typeof item?.cover === 'string' && item.cover.startsWith(COVER_PREFIX)).length
+      : 0;
+    if (prevCovers >= 10 && items.every((item) => !item.cover)) {
+      console.warn(`↺ ${job.id}: 本次 0 张封面(上次 ${prevCovers} 张),按抓取失败处理`);
+      items = [];
     }
   }
 

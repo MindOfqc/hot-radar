@@ -68,3 +68,13 @@ if (brokenCovers.length > 0) {
 
 const summary = IDS.map((id) => `${id}:${snapshot.boards[id].length}`).join(', ');
 console.log(`✓ 九榜快照完整 (${summary}),本地封面 ${localCovers} 个均可访问`);
+
+// 前端只展示带实拍图的热点:某榜整榜无封面会让它在页面上凭空消失,这里显式提醒
+const noCover = IDS.filter(
+  (id) =>
+    snapshot.boards[id].length >= 10 &&
+    !snapshot.boards[id].some((item) => typeof item?.cover === 'string' && item.cover.startsWith('covers/')),
+);
+if (noCover.length > 0) {
+  console.warn(`⚠ 以下榜单没有任何本地封面: ${noCover.join(', ')}`);
+}
