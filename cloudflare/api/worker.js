@@ -721,11 +721,6 @@ async function chatCreate(request, env) {
 }
 
 /* ---------------- 管理员统计（仅 admin） ---------------- */
-async function countOf(env, sql, ...binds) {
-  const row = await env.DB.prepare(sql).bind(...binds).first();
-  return Number(row?.c ?? 0);
-}
-
 function maskEmail(email) {
   const [name, domain] = String(email || "").split("@");
   if (!domain) return "***";
@@ -741,73 +736,69 @@ async function handleAdminStats(request, env) {
   const now = new Date();
   const nowIso = now.toISOString();
   const today = nowIso.slice(0, 10);
-  const day14 = new Date(now.getTime() - 13 * 86_400_000).toISOString().slice(0, 10);
+  const weekAgo = new Date(now.getTime() - 7 * 86_400_000).toISOString();
   const onlineSince = new Date(now.getTime() - ONLINE_WINDOW_MS).toISOString();
-
-  const [usersTotal, usersToday, usersWeek, online, chatsTotal, chatsToday] =
-    await Promise.all([
-      countOf(env, "SELECT COUNT(*) AS c FROM hr_users"),
-      countOf(env, "SELECT COUNT(*) AS c FROM hr_users WHERE substr(created_at,1,10) >= ?", today),
-      countOf(
-        env,
-        "SELECT COUNT(*) AS c FROM hr_users WHERE created_at >= ?",
-        new Date(now.getTime() - 7 * 86_400_000).toISOString(),
-      ),
-      countOf(
-        env,
-        "SELECT COUNT(DISTINCT user_id) AS c FROM hr_sessions WHERE expires_at > ? AND COALESCE(last_seen_at, created_at) >= ?",
-        nowIso,
-        onlineSince,
-      ),
-      countOf(env, "SELECT COUNT(*) AS c FROM hr_chat_messages"),
-      countOf(
-        env,
-        "SELECT COUNT(*) AS c FROM hr_chat_messages WHERE substr(created_at,1,10) >= ?",
-        today,
-      ),
-    ]);
-
-  // 近 14 天趋势：注册 / 登录 / 对话室消息
   const days = Array.from({ length: 14 }, (_, index) =>
     new Date(now.getTime() - (13 - index) * 86_400_000).toISOString().slice(0, 10),
   );
-  const trendQuery = async (table, column) => {
-    const result = await env.DB.prepare(
-      `SELECT substr(${column},1,10) AS d, COUNT(*) AS c FROM ${table} WHERE ${column} >= ? GROUP BY d`,
-    )
-      .bind(`${day14}T00:00:00.000Z`)
-      .all();
-    const map = {};
-    for (const row of result.results || []) map[row.d] = Number(row.c);
-    return days.map((day) => ({ day, count: map[day] || 0 }));
-  };
-  const [registerTrend, loginTrend, chatTrend] = await Promise.all([
-    trendQuery("hr_users", "created_at"),
-    trendQuery("hr_login_logs", "created_at"),
-    trendQuery("hr_chat_messages", "created_at"),
+  const day14 = `${days[0]}T00:00:00.000Z`;
+  const trendWhere = (table) =>
+    `SELECT substr(created_at,1,10) AS d, COUNT(*) AS c FROM ${table} WHERE created_at >= ? GROUP BY d`;
+
+  // 11 条统计并成一次 batch:分四批串行时每次 D1 往返都要几十到上百毫秒
+  const [
+    usersTotal,
+    usersToday,
+    usersWeek,
+    online,
+    chatsTotal,
+    chatsToday,
+    registerRows,
+    loginRows,
+    chatRows,
+    locResult,
+    recentResult,
+  ] = await env.DB.batch([
+    env.DB.prepare("SELECT COUNT(*) AS c FROM hr_users"),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM hr_users WHERE substr(created_at,1,10) >= ?").bind(today),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM hr_users WHERE created_at >= ?").bind(weekAgo),
+    env.DB.prepare(
+      "SELECT COUNT(DISTINCT user_id) AS c FROM hr_sessions WHERE expires_at > ? AND COALESCE(last_seen_at, created_at) >= ?",
+    ).bind(nowIso, onlineSince),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM hr_chat_messages"),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM hr_chat_messages WHERE substr(created_at,1,10) >= ?").bind(today),
+    env.DB.prepare(trendWhere("hr_users")).bind(day14),
+    env.DB.prepare(trendWhere("hr_login_logs")).bind(day14),
+    env.DB.prepare(trendWhere("hr_chat_messages")).bind(day14),
+    env.DB.prepare(
+      "SELECT COALESCE(NULLIF(location,''),'未知') AS location, COUNT(*) AS c FROM hr_login_logs GROUP BY COALESCE(NULLIF(location,''),'未知') ORDER BY c DESC LIMIT 10",
+    ),
+    env.DB.prepare(
+      `SELECT u.email, u.nickname, u.created_at, u.last_login_at,
+              (SELECT l.location FROM hr_login_logs l WHERE l.user_id = u.id ORDER BY l.created_at DESC, l.rowid DESC LIMIT 1) AS location
+       FROM hr_users u ORDER BY u.created_at DESC, u.rowid DESC LIMIT 20`,
+    ),
   ]);
 
-  // 登录地点 Top 10
-  const locResult = await env.DB.prepare(
-    "SELECT COALESCE(NULLIF(location,''),'未知') AS location, COUNT(*) AS c FROM hr_login_logs GROUP BY COALESCE(NULLIF(location,''),'未知') ORDER BY c DESC LIMIT 10",
-  ).all();
-
-  // 最近注册用户 + 最近一次登录地点
-  const recentResult = await env.DB.prepare(
-    `SELECT u.email, u.nickname, u.created_at, u.last_login_at,
-            (SELECT l.location FROM hr_login_logs l WHERE l.user_id = u.id ORDER BY l.created_at DESC, l.rowid DESC LIMIT 1) AS location
-     FROM hr_users u ORDER BY u.created_at DESC, u.rowid DESC LIMIT 20`,
-  ).all();
+  const pickCount = (result) => Number(result?.results?.[0]?.c ?? 0);
+  const trendOf = (result) => {
+    const map = {};
+    for (const row of result?.results || []) map[row.d] = Number(row.c);
+    return days.map((day) => ({ day, count: map[day] || 0 }));
+  };
+  const registerTrend = trendOf(registerRows);
+  const loginTrend = trendOf(loginRows);
+  const chatTrend = trendOf(chatRows);
 
   return json({
     now: nowIso,
     totals: {
-      users: usersTotal,
-      usersToday,
-      usersWeek,
-      online,
-      chats: chatsTotal,
-      chatsToday,
+      users: pickCount(usersTotal),
+      usersToday: pickCount(usersToday),
+      usersWeek: pickCount(usersWeek),
+      online: pickCount(online),
+      chats: pickCount(chatsTotal),
+      chatsToday: pickCount(chatsToday),
     },
     trend: { days, register: registerTrend, login: loginTrend, chat: chatTrend },
     locations: (locResult.results || []).map((row) => ({
