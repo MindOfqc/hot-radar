@@ -4,9 +4,10 @@ import {
   BOARDS,
   applySnapshotCovers,
   boardMeta,
-  fetchBoard,
-  fetchBoards,
-  loadBoardCache,
+  fetchBoardsShared,
+  getCachedBoard,
+  isBoardFresh,
+  loadBoard,
   loadSnapshot,
   snapshotBoardResult,
   type BoardFetchResult,
@@ -20,31 +21,12 @@ import { Badge, Button, Card, EmptyState, HeatBar, Spinner } from '../components
 import { CoverThumb } from '../components/cover-thumb';
 import { ExternalIcon, FlameIcon, RefreshIcon } from '../components/icons';
 
-/** 会话级榜单缓存,切换标签不重复请求 */
-const cache = new Map<BoardId, BoardFetchResult>();
-const STALE_MS = 5 * 60_000;
-const SNAPSHOT_RETRY_MS = 2 * 60_000;
 const TREND_MAX_AGE = 7 * 86_400_000;
 
-/** 缓存新鲜度时间戳(loadedAt 优先,兼容旧结构) */
-function cacheAt(c?: BoardFetchResult | null): number {
-  return c ? (c.loadedAt ?? c.fetchedAt) : 0;
-}
-
-/** 实时结果缓存 5 分钟;快照兜底结果 2 分钟后再尝试实时 */
-function cacheTtl(c?: BoardFetchResult | null): number {
-  return c?.from === 'live' ? STALE_MS : SNAPSHOT_RETRY_MS;
-}
-
 function useBoard(id: BoardId, snap: SnapshotFile | null) {
-  // 模块缓存未命中时从 localStorage 补水,二次访问无需等网络
-  if (!cache.has(id)) {
-    const local = loadBoardCache(id);
-    if (local) cache.set(id, local);
-  }
   const [slot, setSlot] = useState<{ id: BoardId; result: BoardFetchResult | null }>(() => ({
     id,
-    result: cache.get(id) ?? null,
+    result: getCachedBoard(id),
   }));
   const [loading, setLoading] = useState(false);
   const activeId = useRef(id);
@@ -53,7 +35,7 @@ function useBoard(id: BoardId, snap: SnapshotFile | null) {
   // 切换平台时立即丢掉上一个榜的数据;没有 live 缓存时先用仓库快照占位
   const snapshotState = snapshotBoardResult(snap, id);
   const live = slot.id === id ? slot.result : null;
-  const cached = cache.get(id);
+  const cached = getCachedBoard(id);
   const baseState =
     (live && live.items.length > 0 ? live : null) ??
     (cached && cached.items.length > 0 ? cached : null) ??
@@ -67,14 +49,9 @@ function useBoard(id: BoardId, snap: SnapshotFile | null) {
 
   const load = useCallback(
     async (force = false) => {
-      const cachedValue = cache.get(id);
-      if (
-        !force &&
-        cachedValue &&
-        cachedValue.items.length > 0 &&
-        Date.now() - cacheAt(cachedValue) < cacheTtl(cachedValue)
-      ) {
-        if (activeId.current === id) {
+      if (!force && isBoardFresh(id)) {
+        const cachedValue = getCachedBoard(id);
+        if (activeId.current === id && cachedValue) {
           setSlot({ id, result: cachedValue });
           setLoading(false);
         }
@@ -82,8 +59,7 @@ function useBoard(id: BoardId, snap: SnapshotFile | null) {
       }
       if (activeId.current === id) setLoading(true);
       try {
-        const result = await fetchBoard(id, { timeoutMs: 20_000 });
-        cache.set(id, result);
+        const result = await loadBoard(id, { force, timeoutMs: 20_000 });
         if (activeId.current === id) setSlot({ id, result });
       } finally {
         if (activeId.current === id) setLoading(false);
@@ -98,14 +74,7 @@ function useBoard(id: BoardId, snap: SnapshotFile | null) {
 
   useEffect(() => {
     const refreshIfStale = () => {
-      const cachedValue = cache.get(id);
-      if (
-        !cachedValue ||
-        cachedValue.items.length === 0 ||
-        Date.now() - cacheAt(cachedValue) >= cacheTtl(cachedValue)
-      ) {
-        void load(false);
-      }
+      if (!isBoardFresh(id)) void load(false);
     };
     const onVisible = () => {
       if (document.visibilityState === 'visible') refreshIfStale();
@@ -259,30 +228,23 @@ function AggregateView({
 
   const load = useCallback(async (force = false) => {
     // 只拉过期/缺数据的源;单并发 + 700ms 间隔,避免 60s 突发限流
-    const stale = BOARDS.map((b) => b.id).filter((id) => {
-      if (force) return true;
-      const c = cache.get(id);
-      return (
-        !c ||
-        c.items.length === 0 ||
-        Date.now() - cacheAt(c) >= cacheTtl(c)
-      );
-    });
+    const stale = BOARDS.map((b) => b.id).filter((id) => force || !isBoardFresh(id));
     if (stale.length === 0) return;
     setLoading(true);
     try {
-      const fetched = await fetchBoards(stale, {
+      const fetched = await fetchBoardsShared(stale, {
+        force,
         concurrency: 1,
         gapMs: 700,
         timeoutMs: 20_000,
+        onBoard: (id, result) => {
+          if (result.items.length > 0) setResults((prev) => ({ ...prev, [id]: result }));
+        },
       });
       const next: Partial<Record<BoardId, BoardFetchResult>> = {};
       for (const id of stale) {
         const c = fetched[id];
-        if (c) {
-          cache.set(id, c);
-          next[id] = c;
-        }
+        if (c) next[id] = c;
       }
       setResults((prev) => ({ ...prev, ...next }));
     } finally {
@@ -296,15 +258,7 @@ function AggregateView({
 
   useEffect(() => {
     const refreshIfStale = () => {
-      const anyStale = BOARDS.some((b) => {
-        const c = cache.get(b.id);
-        return (
-          !c ||
-          c.items.length === 0 ||
-          Date.now() - cacheAt(c) >= cacheTtl(c)
-        );
-      });
-      if (anyStale) void load(false);
+      if (BOARDS.some((b) => !isBoardFresh(b.id))) void load(false);
     };
     const onVisible = () => {
       if (document.visibilityState === 'visible') refreshIfStale();
@@ -317,8 +271,8 @@ function AggregateView({
     };
   }, [load]);
 
-  const liveCount = boards.filter((board) => (cache.get(board.id) ?? results[board.id])?.from === 'live').length;
-  const snapshotCount = boards.filter((board) => (cache.get(board.id) ?? results[board.id])?.from === 'snapshot').length;
+  const liveCount = boards.filter((board) => (getCachedBoard(board.id) ?? results[board.id])?.from === 'live').length;
+  const snapshotCount = boards.filter((board) => (getCachedBoard(board.id) ?? results[board.id])?.from === 'snapshot').length;
 
   return (
     <Card>
@@ -339,7 +293,7 @@ function AggregateView({
       </div>
 
       {boards.map((b) => {
-        const r = cache.get(b.id) ?? results[b.id];
+        const r = getCachedBoard(b.id) ?? results[b.id];
         const all = applySnapshotCovers(r?.items ?? [], snap?.boards[b.id]).filter(
           (it) => Boolean(it.cover) && !failedCoverKeys.has(coverFailureKey(it)),
         );
@@ -395,11 +349,7 @@ export default function BoardsPage() {
   const [results, setResults] = useState<BoardResults>(() => {
     const seed: BoardResults = {};
     for (const b of BOARDS) {
-      if (!cache.has(b.id)) {
-        const local = loadBoardCache(b.id);
-        if (local) cache.set(b.id, local);
-      }
-      const c = cache.get(b.id);
+      const c = getCachedBoard(b.id);
       if (c && c.items.length > 0) seed[b.id] = c;
     }
     return seed;
@@ -421,8 +371,8 @@ export default function BoardsPage() {
 
   useEffect(() => {
     let alive = true;
-    const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000));
-    void Promise.race([loadSnapshot(), timeout]).then((snapshot) => {
+    // 启动时已预热快照,失败时内部回落为 null,无需再设超时
+    void loadSnapshot().then((snapshot) => {
       if (alive) setSnap(snapshot);
     });
     return () => {
@@ -440,7 +390,7 @@ export default function BoardsPage() {
     () => BOARDS.filter((b) => {
       const result = active !== 'all' && b.id === activeBoard
         ? state
-        : cache.get(b.id) ?? results[b.id];
+        : getCachedBoard(b.id) ?? results[b.id];
       const items = applySnapshotCovers(result?.items ?? snap?.boards[b.id] ?? [], snap?.boards[b.id]);
       return items.some((item) => item.cover && !failedCoverKeys.has(coverFailureKey(item)));
     }),

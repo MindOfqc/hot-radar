@@ -440,3 +440,97 @@ export async function fetchBoards(
   await Promise.all(Array.from({ length: Math.min(concurrency, ids.length) }, worker));
   return result;
 }
+
+/* ---------- 全站共享的榜单缓存 ----------
+ * 榜单页/搜索页/监控共用一份内存缓存(未命中时从 localStorage 补水),
+ * 同一时刻的并发请求合并成一个,避免搜索一次就把 8 个源重拉一遍。 */
+const LIVE_STALE_MS = 5 * 60_000;
+const SNAPSHOT_RETRY_MS = 2 * 60_000;
+
+const boardCache = new Map<BoardId, BoardFetchResult>();
+const inflight = new Map<BoardId, Promise<BoardFetchResult>>();
+
+/** 缓存新鲜度时间戳(loadedAt 优先,兼容旧结构) */
+export function cacheAt(c?: BoardFetchResult | null): number {
+  return c ? (c.loadedAt ?? c.fetchedAt) : 0;
+}
+
+/** 实时结果缓存 5 分钟;快照兜底结果 2 分钟后再尝试实时 */
+export function cacheTtl(c?: BoardFetchResult | null): number {
+  return c?.from === 'live' ? LIVE_STALE_MS : SNAPSHOT_RETRY_MS;
+}
+
+export function getCachedBoard(id: BoardId): BoardFetchResult | null {
+  const hit = boardCache.get(id) ?? loadBoardCache(id);
+  if (hit && !boardCache.has(id)) boardCache.set(id, hit);
+  return hit ?? null;
+}
+
+export function setCachedBoard(id: BoardId, result: BoardFetchResult): void {
+  boardCache.set(id, result);
+}
+
+export function isBoardFresh(id: BoardId): boolean {
+  const c = getCachedBoard(id);
+  return Boolean(c && c.items.length > 0 && Date.now() - cacheAt(c) < cacheTtl(c));
+}
+
+/** 缓存优先地取单个榜单;force 或缓存过期才走网络,并发调用共享同一请求 */
+export function loadBoard(
+  id: BoardId,
+  options: { force?: boolean; timeoutMs?: number } = {},
+): Promise<BoardFetchResult> {
+  const pending = inflight.get(id);
+  if (pending) return pending;
+  if (!options.force && isBoardFresh(id)) return Promise.resolve(getCachedBoard(id)!);
+  const task = fetchBoard(id, { timeoutMs: options.timeoutMs })
+    .then((result) => {
+      setCachedBoard(id, result);
+      return result;
+    })
+    .finally(() => {
+      inflight.delete(id);
+    });
+  inflight.set(id, task);
+  return task;
+}
+
+export interface SharedFetchOptions extends FetchBoardsOptions {
+  force?: boolean;
+  /** 每个源就绪即回调(含直接命中缓存的),供调用方渐进出结果 */
+  onBoard?: (id: BoardId, result: BoardFetchResult) => void;
+}
+
+/** 并发拉取多个榜单,只请求过期/缺数据的源,结果进共享缓存 */
+export async function fetchBoardsShared(
+  ids: BoardId[],
+  options: SharedFetchOptions = {},
+): Promise<Record<BoardId, BoardFetchResult>> {
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT;
+  const result = {} as Record<BoardId, BoardFetchResult>;
+  const pending: BoardId[] = [];
+  for (const id of ids) {
+    if (!options.force && isBoardFresh(id)) {
+      const cached = getCachedBoard(id)!;
+      result[id] = cached;
+      options.onBoard?.(id, cached);
+    } else {
+      pending.push(id);
+    }
+  }
+
+  const concurrency = Math.max(1, options.concurrency ?? 2);
+  const gapMs = Math.max(0, options.gapMs ?? 150);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < pending.length) {
+      const id = pending[cursor++];
+      const fetched = await loadBoard(id, { timeoutMs, force: options.force });
+      result[id] = fetched;
+      options.onBoard?.(id, fetched);
+      if (cursor < pending.length && gapMs) await sleep(gapMs);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
+  return result;
+}

@@ -60,10 +60,32 @@ function shortDate(iso?: string): string {
   return `${date.getMonth() + 1}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
+const STATS_CACHE_KEY = 'hotradar-cache:admin-stats';
+
+function readStatsCache(): AdminStats | null {
+  try {
+    const raw = sessionStorage.getItem(STATS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AdminStats;
+    return parsed?.totals && parsed?.trend ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStatsCache(data: AdminStats): void {
+  try {
+    sessionStorage.setItem(STATS_CACHE_KEY, JSON.stringify(data));
+  } catch {
+    /* 隐私模式下放弃缓存 */
+  }
+}
+
 export default function DashboardPage({ navigate }: { navigate: (to: string) => void }) {
   const auth = useAuth();
-  const [data, setData] = useState<AdminStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  // 会话内缓存上次统计:再次进看板先出数字,后台静默刷新
+  const [data, setData] = useState<AdminStats | null>(() => readStatsCache());
+  const [loading, setLoading] = useState(() => !readStatsCache());
   const [error, setError] = useState('');
   const [snap, setSnap] = useState<SnapshotFile | null>(null);
   const [snapLoaded, setSnapLoaded] = useState(false);
@@ -76,6 +98,7 @@ export default function DashboardPage({ navigate }: { navigate: (to: string) => 
     try {
       const stats = await api<AdminStats>('/api/admin/stats');
       setData(stats);
+      writeStatsCache(stats);
       setError('');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '看板暂时打不开');
@@ -85,11 +108,12 @@ export default function DashboardPage({ navigate }: { navigate: (to: string) => 
   }, []);
 
   useEffect(() => {
+    // 本地缓存已标明管理员就不必等 /api/auth/me 回来再画统计区
     if (!isAdmin) {
       setLoading(false);
       return;
     }
-    void load(false);
+    void load(!readStatsCache());
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void load(true);
     }, 60_000);
@@ -98,8 +122,8 @@ export default function DashboardPage({ navigate }: { navigate: (to: string) => 
 
   useEffect(() => {
     let alive = true;
-    const timeout = new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 4000));
-    void Promise.race([loadSnapshot(), timeout]).then((value) => {
+    // 快照在应用启动时已预热,这里通常直接命中
+    void loadSnapshot().then((value) => {
       if (alive) {
         setSnap(value);
         setSnapLoaded(true);
@@ -164,7 +188,8 @@ export default function DashboardPage({ navigate }: { navigate: (to: string) => 
     return values.length ? Math.max(...values) : snap.generatedAt;
   }, [boards, snap]);
 
-  if (!auth.ready) {
+  // 有本地缓存的登录态就先画页面,权限在后台校验;完全没登录过才等 /api/auth/me
+  if (!auth.user && !auth.ready) {
     return (
       <div className="mx-auto flex max-w-xl items-center justify-center py-20">
         <Card className="flex items-center gap-3 px-6 py-5">

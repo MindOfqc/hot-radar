@@ -1,5 +1,5 @@
-import type { BoardId, WatchResult } from '../types';
-import { BOARDS, fetchBoards } from './boards';
+import type { BoardId, BoardItem, WatchResult } from '../types';
+import { BOARDS, fetchBoardsShared } from './boards';
 import { hnSearch } from './hackernews';
 
 /** 把关键词拆成可用于匹配的词元(小写、去停用) */
@@ -31,6 +31,10 @@ export interface ScanOptions {
   hnLimit?: number;
   /** 命中后需要排除的词 */
   exclude?: string;
+  /** 忽略共享缓存,强制重拉各榜 */
+  force?: boolean;
+  /** 每个数据源就绪即回调已聚合的部分结果,用于渐进渲染 */
+  onPartial?: (partial: ScanOutcome) => void;
 }
 
 export interface ScanOutcome {
@@ -39,71 +43,101 @@ export interface ScanOutcome {
   sourceStats: { source: string; total: number; matched: number; ok: boolean }[];
 }
 
+type SourceStat = ScanOutcome['sourceStats'][number];
+
+/** 榜单命中条目转成监控结果结构 */
+function toResults(id: BoardId, items: BoardItem[]): WatchResult[] {
+  return items.map((it) => ({
+    id: it.url,
+    title: it.title,
+    url: it.url,
+    source: id,
+    heat: it.heat,
+    heatLabel: it.heatLabel,
+    foundAt: Date.now(),
+  }));
+}
+
+/** 一次扫描内共享的聚合器:边到边累积、按 url 去重、按热度排序 */
+function createAggregator(boardIds: BoardId[], onPartial?: (partial: ScanOutcome) => void) {
+  const stats = new Map<string, SourceStat>();
+  const collected: WatchResult[] = [];
+  const seen = new Set<string>();
+
+  const snapshot = (): ScanOutcome => ({
+    results: [...collected].sort((a, b) => (b.heat ?? 0) - (a.heat ?? 0)),
+    sourceStats: boardIds.flatMap((id) => {
+      const stat = stats.get(id);
+      return stat ? [stat] : [];
+    }),
+  });
+
+  return {
+    snapshot,
+    add(source: string, matched: WatchResult[], stat: SourceStat) {
+      for (const item of matched) {
+        if (!item.url || seen.has(item.url)) continue;
+        seen.add(item.url);
+        collected.push(item);
+      }
+      stats.set(source, stat);
+      onPartial?.(snapshot());
+    },
+  };
+}
+
 /**
  * 对一个关键词做全网扫描:
- * 1. 拉取各热榜,标题/摘要命中关键词的条目记为命中
+ * 1. 拉取各热榜,标题/摘要命中关键词的条目记为命中(复用共享缓存,只重拉过期源)
  * 2. HackerNews 直接按关键词搜索(结果本身就是相关的)
+ * 3. 每个源就绪即回调,调用方可以渐进出结果
  */
 export async function scanKeyword(keyword: string, opts: ScanOptions = {}): Promise<ScanOutcome> {
   const terms = splitTerms(keyword);
   const excludeTerms = opts.exclude?.trim() ? splitTerms(opts.exclude) : [];
   const hit = (text: string) => matches(text, terms) && !matches(text, excludeTerms);
   const boardIds = opts.boards ?? BOARDS.map((b) => b.id);
+  const agg = createAggregator(boardIds, opts.onPartial);
 
-  const [boardResults, hnResults] = await Promise.all([
-    fetchBoards(boardIds.filter((id) => id !== 'hackernews')),
-    boardIds.includes('hackernews')
-      ? hnSearch(keyword, { byDate: true, withinDays: 7, limit: opts.hnLimit ?? 15 }).catch(
-          () => [],
-        )
-      : Promise.resolve([]),
+  const hnTask = boardIds.includes('hackernews')
+    ? hnSearch(keyword, { byDate: true, withinDays: 7, limit: opts.hnLimit ?? 15 })
+        .catch(() => [] as WatchResult[])
+        .then((rows) => {
+          const matched = rows.filter(
+            (r) => !matches(`${r.title} ${r.content ?? ''}`, excludeTerms),
+          );
+          agg.add('hackernews', matched, {
+            source: 'hackernews',
+            total: rows.length,
+            matched: matched.length,
+            ok: true,
+          });
+        })
+    : Promise.resolve();
+
+  await Promise.all([
+    fetchBoardsShared(boardIds.filter((id) => id !== 'hackernews'), {
+      force: opts.force,
+      concurrency: 3,
+      gapMs: 120,
+      timeoutMs: 8_000,
+      onBoard: (id, fetched) => {
+        const matched = toResults(
+          id,
+          fetched.items.filter((it) => hit(`${it.title} ${it.extra ?? ''}`)),
+        );
+        agg.add(id, matched, {
+          source: id,
+          total: fetched.items.length,
+          matched: matched.length,
+          ok: fetched.items.length > 0,
+        });
+      },
+    }),
+    hnTask,
   ]);
 
-  const sourceStats: ScanOutcome['sourceStats'] = [];
-  const results: WatchResult[] = [];
-
-  for (const [id, fetched] of Object.entries(boardResults)) {
-    const matched = fetched.items
-      .filter((it) => hit(`${it.title} ${it.extra ?? ''}`))
-      .map<WatchResult>((it) => ({
-        id: it.url,
-        title: it.title,
-        url: it.url,
-        source: id as BoardId,
-        heat: it.heat,
-        heatLabel: it.heatLabel,
-        foundAt: Date.now(),
-      }));
-    sourceStats.push({
-      source: id,
-      total: fetched.items.length,
-      matched: matched.length,
-      ok: fetched.items.length > 0,
-    });
-    results.push(...matched);
-  }
-
-  if (boardIds.includes('hackernews')) {
-    const hnMatched = hnResults.filter((r) => !matches(`${r.title} ${r.content ?? ''}`, excludeTerms));
-    sourceStats.push({
-      source: 'hackernews',
-      total: hnResults.length,
-      matched: hnMatched.length,
-      ok: true,
-    });
-    results.push(...hnMatched);
-  }
-
-  // 去重(以 url 为准)后按热度排序
-  const seen = new Set<string>();
-  const unique = results.filter((r) => {
-    if (!r.url || seen.has(r.url)) return false;
-    seen.add(r.url);
-    return true;
-  });
-  unique.sort((a, b) => (b.heat ?? 0) - (a.heat ?? 0));
-
-  return { results: unique, sourceStats };
+  return agg.snapshot();
 }
 
 /** 扫描结果并入历史:保留 AI 分析结论,识别新增条目 */
@@ -145,6 +179,8 @@ export interface BatchScanOptions {
   terms?: Record<string, string[]>;
   /** 自定义 HN 查询语句;缺省时用索引文本 */
   hnQueries?: Record<string, string>;
+  /** 忽略共享缓存,强制重拉各榜 */
+  force?: boolean;
 }
 
 /**
@@ -157,7 +193,12 @@ export async function scanKeywords(
 ): Promise<Record<string, ScanOutcome>> {
   const boardIds = opts.boards ?? BOARDS.map((b) => b.id);
   const [boardResults, hnLists] = await Promise.all([
-    fetchBoards(boardIds.filter((id) => id !== 'hackernews')),
+    fetchBoardsShared(boardIds.filter((id) => id !== 'hackernews'), {
+      force: opts.force,
+      concurrency: 3,
+      gapMs: 120,
+      timeoutMs: 8_000,
+    }),
     Promise.all(
       boardIds.includes('hackernews')
         ? texts.map((text) =>

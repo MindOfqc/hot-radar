@@ -285,6 +285,7 @@ function KeywordPanel({
     try {
       const outcome = await scanKeyword(kw.text, {
         exclude: combinedExclude(kw.exclude, settings),
+        force: true,
       });
       const known = new Set(resultsRef.current.map((item) => item.id));
       const added = outcome.results.filter((item) => !known.has(item.id));

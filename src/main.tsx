@@ -2,6 +2,10 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import App from './app';
+import { loadSnapshot } from './lib/boards';
+
+// 预热每日快照:进榜单/看板时直接命中,不必等首屏请求
+void loadSnapshot();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
